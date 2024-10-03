@@ -26,34 +26,49 @@
 <body>
     <button id="createWindow">Spawn Block</button>
     <button id="createTrampoline">Spawn Trampoline</button>
+    <button id="createConveyorBelt">Spawn Conveyor Belt</button>
+    <button id="createPortals">Spawn Portals</button>
 
     <script>
         const gravity = 0.5;
         const friction = 0.3;
         const windowFriction = 0.95;
         const trampolineBounceFactor = 0.9;
+        const conveyorSpeed = 2;
+        const portalCooldown = 2000; // 2 seconds in milliseconds
         const windows = [];
+        let portals = [];
 
-        function createWindow(isTrampoline = false) {
+        function createWindow(isTrampoline = false, isConveyorBelt = false, isPortal = false) {
             const width = Math.floor(Math.random() * 100) + 150;
             const height = Math.floor(Math.random() * 100) + 100;
-            const color = isTrampoline ? '#000000' : `hsl(${Math.random() * 360}, 70%, 50%)`;
+            let color;
+            if (isTrampoline) {
+                color = '#000000';
+            } else if (isConveyorBelt) {
+                color = '#808080';
+            } else if (isPortal) {
+                color = '#FF00FF'; // Magenta color for portals
+            } else {
+                color = `hsl(${Math.random() * 360}, 70%, 50%)`;
+            }
             const newWindow = window.open('', '', `width=${width},height=${height},resizable=yes`);
             
             newWindow.document.write(`
                 <html>
                 <head>
-                    <title>${isTrampoline ? 'Trampoline' : 'Normal'} Block</title>
+                    <title>${isTrampoline ? 'Trampoline' : isConveyorBelt ? 'Conveyor Belt' : isPortal ? 'Portal' : 'Normal'} Block</title>
                     <style>
                         body {
                             background-color: ${color};
                             display: flex;
+                            flex-direction: column;
                             justify-content: center;
                             align-items: center;
                             height: 100vh;
                             margin: 0;
                             font-family: Arial, sans-serif;
-                            color: ${isTrampoline ? 'white' : 'black'};
+                            color: ${isTrampoline || isConveyorBelt || isPortal ? 'white' : 'black'};
                             font-size: 18px;
                             user-select: none;
                             cursor: grab;
@@ -61,10 +76,20 @@
                         body:active {
                             cursor: grabbing;
                         }
+                        button {
+                            font-size: 14px;
+                            padding: 5px 10px;
+                        }
+                        #cooldown {
+                            font-size: 24px;
+                            font-weight: bold;
+                        }
                     </style>
                 </head>
                 <body>
-                    <div>${isTrampoline ? 'Boing!' : 'Block'}</div>
+                    ${isConveyorBelt ? '<button id="changeDirection">&#8635;</button>' : 
+                      isPortal ? '<div id="cooldown"></div>' :
+                      `<div>${isTrampoline ? 'Boing!' : 'Block'}</div>`}
                 </body>
                 </html>
             `);
@@ -84,7 +109,11 @@
                 offsetY: 0,
                 mass: width * height / 10000,
                 lastFocusTime: Date.now(),
-                isTrampoline: isTrampoline
+                isTrampoline: isTrampoline,
+                isConveyorBelt: isConveyorBelt,
+                isPortal: isPortal,
+                conveyorDirection: 'right',
+                lastTeleportTime: 0
             };
 
             newWindow.moveTo(windowData.x, windowData.y);
@@ -128,7 +157,28 @@
                 updateWindowSize(windowData);
             });
 
+            if (isConveyorBelt) {
+                newWindow.document.getElementById('changeDirection').addEventListener('click', () => {
+                    const directions = ['right', 'down', 'left', 'up'];
+                    const currentIndex = directions.indexOf(windowData.conveyorDirection);
+                    windowData.conveyorDirection = directions[(currentIndex + 1) % directions.length];
+                });
+            }
+
             windows.push(windowData);
+            return windowData;
+        }
+
+        function createPortals() {
+            if (portals.length === 2) {
+                portals.forEach(portal => portal.window.close());
+                portals = [];
+            }
+            
+            const portal1 = createWindow(false, false, true);
+            const portal2 = createWindow(false, false, true);
+            
+            portals = [portal1, portal2];
         }
 
         function updateWindowSize(windowData) {
@@ -137,16 +187,13 @@
             const dx = newWidth - windowData.width;
             const dy = newHeight - windowData.height;
 
-            // Update position to keep the window centered
             windowData.x -= dx / 2;
             windowData.y -= dy / 2;
 
-            // Update dimensions and mass
             windowData.width = newWidth;
             windowData.height = newHeight;
             windowData.mass = windowData.width * windowData.height / 10000;
 
-            // Ensure the window stays within screen bounds
             windowData.x = Math.max(0, Math.min(windowData.x, window.screen.availWidth - windowData.width));
             windowData.y = Math.max(0, Math.min(windowData.y, window.screen.availHeight - windowData.height));
 
@@ -161,24 +208,36 @@
         }
 
         function resolveCollision(a, b) {
+            if (a.isPortal || b.isPortal) {
+                const portalWindow = a.isPortal ? a : b;
+                const teleportingWindow = a.isPortal ? b : a;
+                
+                if (!teleportingWindow.isPortal) {
+                    const otherPortal = portals.find(portal => portal !== portalWindow);
+                    if (otherPortal && Date.now() - teleportingWindow.lastTeleportTime > portalCooldown) {
+                        teleportingWindow.x = otherPortal.x + (otherPortal.width - teleportingWindow.width) / 2;
+                        teleportingWindow.y = otherPortal.y + (otherPortal.height - teleportingWindow.height) / 2;
+                        teleportingWindow.window.moveTo(Math.round(teleportingWindow.x), Math.round(teleportingWindow.y));
+                        teleportingWindow.lastTeleportTime = Date.now();
+                    }
+                }
+                return;
+            }
+
             if (a.isTrampoline || b.isTrampoline) {
                 const trampolineWindow = a.isTrampoline ? a : b;
                 const bouncingWindow = a.isTrampoline ? b : a;
 
-                // Check if the bouncing window is above the trampoline
                 if (bouncingWindow.y + bouncingWindow.height > trampolineWindow.y &&
                     bouncingWindow.y < trampolineWindow.y) {
-                    // Bounce the window upwards
                     bouncingWindow.vy = -Math.abs(bouncingWindow.vy) * trampolineBounceFactor;
                     bouncingWindow.y = trampolineWindow.y - bouncingWindow.height;
                 }
             } else {
-                // Regular collision between non-trampoline windows
                 const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
                 const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
 
                 if (overlapX < overlapY) {
-                    // Horizontal collision
                     const tempVx = a.vx;
                     a.vx = b.vx;
                     b.vx = tempVx;
@@ -188,7 +247,6 @@
                         a.x = b.x + b.width;
                     }
                 } else {
-                    // Vertical collision
                     const tempVy = a.vy;
                     a.vy = b.vy;
                     b.vy = tempVy;
@@ -204,7 +262,38 @@
                 a.vy *= restitution * windowFriction;
                 b.vx *= restitution * windowFriction;
                 b.vy *= restitution * windowFriction;
+
+                // Apply conveyor belt effect after collision
+                if (a.isConveyorBelt || b.isConveyorBelt) {
+                    const conveyorWindow = a.isConveyorBelt ? a : b;
+                    const movingWindow = a.isConveyorBelt ? b : a;
+
+                    switch (conveyorWindow.conveyorDirection) {
+                        case 'right':
+                            movingWindow.vx += conveyorSpeed;
+                            break;
+                        case 'left':
+                            movingWindow.vx -= conveyorSpeed;
+                            break;
+                        case 'down':
+                            movingWindow.vy += conveyorSpeed;
+                            break;
+                        case 'up':
+                            movingWindow.vy -= conveyorSpeed;
+                            break;
+                    }
+                }
             }
+        }
+
+        function updatePortalCooldown() {
+            portals.forEach(portal => {
+                const cooldownElement = portal.window.document.getElementById('cooldown');
+                if (cooldownElement) {
+                    const timeLeft = Math.max(0, Math.ceil((portalCooldown - (Date.now() - portal.lastTeleportTime)) / 1000));
+                    cooldownElement.textContent = timeLeft > 0 ? timeLeft : 'Ready';
+                }
+            });
         }
 
         function animate() {
@@ -257,18 +346,20 @@
                     windowData.window.moveTo(Math.round(windowData.x), Math.round(windowData.y));
                 }
 
-                // Focus management
                 if (Date.now() - windowData.lastFocusTime > 100) {
                     windowData.window.focus();
                     windowData.lastFocusTime = Date.now();
                 }
             });
 
+            updatePortalCooldown();
             requestAnimationFrame(animate);
         }
 
         document.getElementById('createWindow').addEventListener('click', () => createWindow(false));
         document.getElementById('createTrampoline').addEventListener('click', () => createWindow(true));
+        document.getElementById('createConveyorBelt').addEventListener('click', () => createWindow(false, true));
+        document.getElementById('createPortals').addEventListener('click', createPortals);
 
         animate();
     </script>
